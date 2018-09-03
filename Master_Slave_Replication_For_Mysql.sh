@@ -4,6 +4,8 @@ echo " +------------------------------------------------------------------------
 echo " |                                                  IMPORTANT NOTES                                                    |"
 echo " | This script must be run with maximum privileges. Run with sudo or run it as 'root'.                                 |"
 echo " | Before starting step 2 be sure that master server can connect to slave server via SSH                               |"
+echo " | This script uses 'sshpass' package to run commands on slave server. In order to do this it will ask you to install  |"
+echo " | 'sshpass' if it is not installed on your system.                                                                    |"
 echo " | This script was written and tested under OS Ubuntu 16.04 with MariaDB-Server 10.0.34                                |"
 echo " | This script must be run on the master server in order to work properly.                                             |"
 echo " | This script will do:                                                                                                |"
@@ -154,9 +156,11 @@ do
 	read -p " > Do you want to install MariaDB-Server on master and slave node(s)? [y/n]: " Answer
 	case $Answer in
 		[Yy]* )
+				apt-get update
 				apt -y install mariadb-server
 				Installed_On_Master=`dpkg -l | grep mariadb-server | wc -l`
 				Service_Up_On_Master=`/bin/systemctl | grep mysql.service | grep 'active running' | wc -l`
+				$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "apt-get update"
 				$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "apt -y install mariadb-server"
 				Installed_On_Slave=`$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "dpkg -l | grep mariadb-server | wc -l"`
 				Service_Up_On_Slave=`$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "/bin/systemctl | grep mysql.service | grep 'active running' | wc -l"`
@@ -300,7 +304,7 @@ do
 done
 
 SQL_Output=`mysql <<EOF_SQL
-GRANT REPLICATION SLAVE ON *.* TO 'slave_user'@'%' IDENTIFIED BY '$Slave_DB_User_Pass';
+GRANT ALL PRIVILEGES ON *.* TO 'slave_user'@'%' IDENTIFIED BY '$Slave_DB_User_Pass';
 FLUSH PRIVILEGES;
 CREATE USER 'backup_user'@'$Slave_Node_IP' IDENTIFIED BY '$Backup_User_Pass';
 exit
@@ -357,6 +361,7 @@ then
 	$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "echo '[mysqld]' >> $CNF_File_Full_Path"
 	$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "echo '#skip-networking' >> $CNF_File_Full_Path"
 	$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "echo '#bind-address=127.0.0.1' >> $CNF_File_Full_Path"
+	$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "echo 'bind-address=${Slave_Node_IP}' >> $CNF_File_Full_Path"
 	$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "echo 'server-id=2' >> $CNF_File_Full_Path"
 fi
 
@@ -379,53 +384,49 @@ else
 		esac
 	done
 fi
-# 
-#$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "SQL_Output=`mysql <<EOF_SQL
-#CHANGE MASTER TO MASTER_HOST='$Master_Node_IP', MASTER_USER='slave_user', MASTER_PASSWORD='$Slave_DB_User_Pass', MASTER_LOG_FILE='$SQL_Binary_File_Name', MASTER_LOG_POS=$SQL_Position;
-#exit
-#EOF_SQL`"
-#
-#
-#$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "/bin/systemctl restart mysql.service"
-#Service_Up_On_Slave=`$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "/bin/systemctl | grep mysql.service | grep 'active running' | wc -l"`
-#
-#if [ $Service_Up_On_Slave -ge 1 ]
-#then
-#	echo " > Mysql service restarted on slave. Service status is 'active running'"
-#else
-#	while true
-#	do
-#		read -p "  > Mysql service status is not 'active running' on slave. Do you want to continue? [y/n]: " Answer
-#		case $Answer in
-#			[Yy]* ) 
-#					break;;
-#			[Nn]* )
-#					;;
-#			* ) 	echo " please answer [y]es or [n]o.";;
-#		esac
-#	done
-#fi
-#
-#
-#/bin/systemctl restart mysql.service
-#Service_Up_On_Master=`/bin/systemctl | grep mysql.service | grep 'active running' | wc -l`
-#
-#if [ $Service_Up_On_Master -ge 1 ]
-#then
-#	echo " > Mysql service restarted. Service status is 'active running'"
-#else
-#	while true
-#	do
-#		read -p "  > Mysql service status is not 'active running'. Do you want to continue? [y/n]: " Answer
-#		case $Answer in
-#			[Yy]* ) 
-#					break;;
-#			[Nn]* )
-#					;;
-#			* ) 	echo " please answer [y]es or [n]o.";;
-#		esac
-#	done
-#fi
+
+/usr/bin/mysql -h $Slave_Node_IP -u slave_user -p$Slave_DB_User_Pass -e "CHANGE MASTER TO MASTER_HOST='$Master_Node_IP', MASTER_USER='slave_user', MASTER_PASSWORD='$Slave_DB_User_Pass', MASTER_LOG_FILE='$SQL_Binary_File_Name', MASTER_LOG_POS=$SQL_Position;";
+
+$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "/bin/systemctl restart mysql.service"
+Service_Up_On_Slave=`$SSHPass_Application_Full_Path -p $Slave_Node_Password ssh root@$Slave_Node_IP "/bin/systemctl | grep mysql.service | grep 'active running' | wc -l"`
+
+if [ $Service_Up_On_Slave -ge 1 ]
+then
+	echo " > Mysql service restarted on slave. Service status is 'active running'"
+else
+	while true
+	do
+		read -p "  > Mysql service status is not 'active running' on slave. Do you want to continue? [y/n]: " Answer
+		case $Answer in
+			[Yy]* ) 
+					break;;
+			[Nn]* )
+					;;
+			* ) 	echo " please answer [y]es or [n]o.";;
+		esac
+	done
+fi
+
+
+/bin/systemctl restart mysql.service
+Service_Up_On_Master=`/bin/systemctl | grep mysql.service | grep 'active running' | wc -l`
+
+if [ $Service_Up_On_Master -ge 1 ]
+then
+	echo " > Mysql service restarted on master. Service status is 'active running'"
+else
+	while true
+	do
+		read -p "  > Mysql service status is not 'active running' on master. Do you want to continue? [y/n]: " Answer
+		case $Answer in
+			[Yy]* ) 
+					break;;
+			[Nn]* )
+					;;
+			* ) 	echo " please answer [y]es or [n]o.";;
+		esac
+	done
+fi
 
 echo " > FINISHED..."
 			
